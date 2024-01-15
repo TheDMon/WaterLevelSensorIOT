@@ -30,6 +30,7 @@
 #include <Arduino.h>
 #ifdef ESP8266
   #include <ESP8266WiFi.h>
+  #include "ESPAsyncWebSrv.h"
 #endif
 #ifdef ESP32
   #include <WiFi.h>
@@ -42,14 +43,14 @@
 
 #define APP_KEY    "ad04dc1c-be73-4cc7-922f-cf4c131265ef"
 #define APP_SECRET "1b7bb02f-d326-4219-b3f3-b22bc82d6601-52a58116-fb53-4e43-95a0-b11bb1c2acb9"
-#define DEVICE_ID  "657ffe580c9e5d526c752623"
+#define DEVICE_ID  "65a559e4ccc93539a124099b"
 
-#define SSID       "Home_Network"
-#define PASS       "NetworkAdmin"
+#define SSID       "Home_Network"//"JioFi3_5CC044_Asish"//"Home_Network"
+#define PASS       "NetworkAdmin"//"Aishani2018"//"NetworkAdmin"
 
-#define BAUD_RATE  9600
+#define BAUD_RATE  115200
 
-#define EVENT_WAIT_TIME   10000 // send event every 10 seconds
+#define EVENT_WAIT_TIME   30000 // send event every 30 seconds
 
 #if defined(ESP8266)
   const int trigPin = 12; //D6
@@ -69,7 +70,7 @@
 
 char auth[] = BLYNK_AUTH_TOKEN;
 
-const int EMPTY_TANK_HEIGHT = 100; // Height when the tank is empty - dhalai top 104, dhalai bottom - 92
+const int EMPTY_TANK_HEIGHT = 90; // Height when the tank is empty - dhalai top 104, dhalai bottom - 92
 const int FULL_TANK_HEIGHT  =  20; // Height when the tank is full - tank bottom to balloon - 81, dhalai top to balloon 10 //waterproof sensor min measure distance 20cm
 
 WaterLevelIndicator &waterLevelIndicator = SinricPro[DEVICE_ID];
@@ -80,6 +81,12 @@ WaterLevelIndicator &waterLevelIndicator = SinricPro[DEVICE_ID];
 // Declaration for an SSD1306 display connected to I2C (SDA, SCL pins)
 #define OLED_RESET     -1 // Reset pin # (or -1 if sharing Arduino reset pin)
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
+
+// Create AsyncWebServer object on port 80
+// Set your access point network credentials
+const char* ap_ssid = "ESP8266-Basement-Access-Point";
+const char* ap_password = "123456789";
+AsyncWebServer server(80);
 
 long duration;
 float distanceInCm; 
@@ -97,6 +104,17 @@ void sendPushNotification(String notification) {
   waterLevelIndicator.sendPushNotification(notification);
 }
 
+long getDuration() {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(10);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(15);
+
+  digitalWrite(trigPin, LOW);
+  return pulseIn(echoPin, HIGH);
+}
+
 void handleSensor() {
   if (SinricPro.isConnected() == false) {
     Serial.printf("SinricPro is disconnected. Please check!\r\n");; 
@@ -111,13 +129,14 @@ void handleSensor() {
   if (last_millis && current_millis - last_millis < EVENT_WAIT_TIME) return; // Wait untill 30 secs
   last_millis = current_millis;
 
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(15);
-  digitalWrite(trigPin, LOW);
-  
-  duration = pulseIn(echoPin, HIGH);   
+  int measurementsCounter = 30;
+  duration = 0;
+  for (int i = 0; i < measurementsCounter; i++) {
+    duration += getDuration();
+  }
+
+  duration = duration/measurementsCounter;
+
   Serial.printf("duration read: %d..\r\n", duration); 
   distanceInCm = duration / 29 / 2;
   
@@ -141,11 +160,11 @@ void handleSensor() {
   waterLevelAsPer = map((int)distanceInCm ,EMPTY_TANK_HEIGHT, FULL_TANK_HEIGHT, 0, 100); 
   waterLevelAsPer = constrain(waterLevelAsPer, 1, 100);
 
-  if(lastWaterLevelAsPer == waterLevelAsPer) {
-    Serial.printf("Water level did not changed in Percentage. do nothing...!\r\n");
-    return;
-  }  
-  lastWaterLevelAsPer = waterLevelAsPer;
+  // if(lastWaterLevelAsPer == waterLevelAsPer) {
+  //   Serial.printf("Water level did not changed in Percentage. do nothing...!\r\n");
+  //   return;
+  // }  
+  // lastWaterLevelAsPer = waterLevelAsPer;
   
   Serial.printf("Distance (cm): %f. %d%%\r\n", distanceInCm, waterLevelAsPer); 
   
@@ -155,21 +174,30 @@ void handleSensor() {
   Blynk.virtualWrite(VPIN_DISTANCE, distanceInCm);
   displayData();
 
+  /* only play buzzer when water level changes in percentage */
+  if(lastWaterLevelAsPer != waterLevelAsPer) {
   /* Send a push notification if the water level is too low! */
-  if(waterLevelAsPer < 5) { 
-    sendPushNotification("Water level is too low!");
-    controlBuzzer(300);
-    delay(100);
-    controlBuzzer(300);
-    delay(100);
-    controlBuzzer(300);
-    delay(100);
-  } 
+    if(waterLevelAsPer < 5) { 
+      sendPushNotification("Water level is too low!");
+      controlBuzzer(300);
+      delay(100);
+      controlBuzzer(300);
+      delay(100);
+      controlBuzzer(300);
+      delay(100);
+    } 
 
-  /* when water level reaches 100 %*/
-  if(waterLevelAsPer >= 100) { 
-    controlBuzzer(500);
-  } 
+    /* when water level reaches 100 %*/
+    if(waterLevelAsPer >= 100) { 
+      controlBuzzer(700);
+      delay(400);
+      controlBuzzer(700);
+      delay(400);
+      controlBuzzer(700);
+      delay(400);
+    } 
+  }
+  
 }
 
 void controlBuzzer(int duration){
@@ -182,6 +210,35 @@ void controlBuzzer(int duration){
 /********* 
  * Setup *
  *********/
+
+ void setupHttpServer(){
+  // Setting the ESP as an access point
+  Serial.print("Setting AP (Access Point)…");
+  // Remove the password parameter, if you want the AP (Access Point) to be open
+  WiFi.softAP(ap_ssid, ap_password);
+
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(IP);
+
+  server.on("/waterLevelAsPer", HTTP_GET, [](AsyncWebServerRequest *request){
+    Serial.println("waterLevelAsPer api endpoint hit…");
+    request->send_P(200, "text/plain", String(waterLevelAsPer).c_str());
+  });
+
+  server.on("/distance", HTTP_GET, [](AsyncWebServerRequest *request){
+    Serial.println("test api endpoint hit…");
+    request->send_P(200, "text/plain",  String(distanceInCm).c_str());
+  });
+
+  server.on("/test", HTTP_GET, [](AsyncWebServerRequest *request){
+    Serial.println("distance api endpoint hit…");
+    request->send_P(200, "text/plain", "This is test message");
+  });
+
+  // Start server
+  server.begin();
+ }
 
 void setupSensor() {
   pinMode(trigPin, OUTPUT);
@@ -283,6 +340,7 @@ void setup() {
   setupSensor();
   setupNodeMCU();
   setupWiFi();
+  setupHttpServer();
   setupSinricPro();
   setupBlynk();
   setupDisplay();
