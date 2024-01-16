@@ -30,11 +30,14 @@
 #include <Arduino.h>
 #ifdef ESP8266
   #include <ESP8266WiFi.h>
-  #include "ESPAsyncWebSrv.h"
+  #include <ESPAsyncTCP.h>
+  #include <ESPAsyncWebServer.h>//#include "ESPAsyncWebSrv.h"
 #endif
 #ifdef ESP32
   #include <WiFi.h>
 #endif
+
+#include <AsyncElegantOTA.h>
 
 #include <SinricPro.h>
 #include "WaterLevelIndicator.h"
@@ -237,6 +240,11 @@ void controlBuzzer(int duration){
     request->send_P(200, "text/plain", "This is test message");
   });
 
+  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "text/plain", "Hi! I'm water tank sensor server. You can upload new compiled binary (sketch -> export compiled binary menu) using ip/update url on the browser.");
+  });
+
+  AsyncElegantOTA.begin(&server);    // Start AsyncElegantOTA
   // Start server
   server.begin();
  }
@@ -319,7 +327,12 @@ void setupWiFi() {
     Serial.printf(".");
     delay(250);
   }
-  Serial.printf("connected\r\n");
+
+  Serial.println("");
+  Serial.print("Connected to ");
+  Serial.println(SSID);
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
 }
 
 void checkBlynkStatus() { // called every 3 seconds by SimpleTimer
@@ -361,4 +374,5 @@ void loop() {
   SinricPro.handle();
   Blynk.run();
   timer.run(); // Initiates SimpleTimer
+  AsyncElegantOTA.loop();
 }
