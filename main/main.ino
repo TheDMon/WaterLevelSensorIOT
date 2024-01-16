@@ -106,7 +106,7 @@ void sendPushNotification(String notification) {
 
 long getDuration() {
   digitalWrite(trigPin, LOW);
-  delayMicroseconds(10);
+  delayMicroseconds(2);
 
   digitalWrite(trigPin, HIGH);
   delayMicroseconds(15);
@@ -133,6 +133,7 @@ void handleSensor() {
   duration = 0;
   for (int i = 0; i < measurementsCounter; i++) {
     duration += getDuration();
+    delay(100);
   }
 
   duration = duration/measurementsCounter;
