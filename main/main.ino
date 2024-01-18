@@ -32,6 +32,7 @@
   #include <ESP8266WiFi.h>
   #include <ESPAsyncTCP.h>
   #include <ESPAsyncWebServer.h>//#include "ESPAsyncWebSrv.h"
+  #include <WebSerialLite.h>
 #endif
 #ifdef ESP32
   #include <WiFi.h>
@@ -120,11 +121,13 @@ long getDuration() {
 
 void handleSensor() {
   if (SinricPro.isConnected() == false) {
-    Serial.printf("SinricPro is disconnected. Please check!\r\n");; 
+    Serial.printf("SinricPro is disconnected. Please check!\r\n");
+    WebSerial.println("SinricPro is disconnected. Please check!");
   }
 
   if(Blynk.connected() == false) {
-    Serial.printf("Blynk is disconnected. Please check!\r\n");; 
+    Serial.printf("Blynk is disconnected. Please check!\r\n");
+    WebSerial.println("Blynk is disconnected. Please check!");
   }
 
   static unsigned long last_millis;
@@ -134,52 +137,57 @@ void handleSensor() {
 
   int measurementsCounter = 30;
   duration = 0;
+  long pulseDuration = 0;
   for (int i = 0; i < measurementsCounter; i++) {
-    duration += getDuration();
+    pulseDuration = getDuration();
+    Serial.printf("pulseDuration ==>: %d\r\n", pulseDuration);
+    WebSerial.printf("pulseDuration ==>: %d\r\n", pulseDuration);
+    duration += pulseDuration;
     delay(100);
   }
 
   duration = duration/measurementsCounter;
 
   Serial.printf("duration read: %d..\r\n", duration); 
+  WebSerial.printf("duration read: %d..\r\n", duration); 
   distanceInCm = duration / 29 / 2;
   
   if(distanceInCm <= 0) { 
     Serial.printf("Invalid reading: %d..\r\n", distanceInCm); 
+    WebSerial.printf("Invalid reading: %d..\r\n", distanceInCm); 
     return;
   }
   
   if(lastDistanceInCm == distanceInCm) { 
     Serial.printf("Water level did not changed. do nothing...!\r\n");
+    WebSerial.println("Water level did not changed. do nothing...!");
     return;
   }
   
   int change = abs(lastDistanceInCm - distanceInCm);
   if(change < 2) {
     Serial.println("Too small change in water level (waves?). Ignore...");
+    WebSerial.println("Too small change in water level (waves?). Ignore...");
     return;
   }
   
   lastDistanceInCm = distanceInCm;
   waterLevelAsPer = map((int)distanceInCm ,EMPTY_TANK_HEIGHT, FULL_TANK_HEIGHT, 0, 100); 
   waterLevelAsPer = constrain(waterLevelAsPer, 1, 100);
-
-  // if(lastWaterLevelAsPer == waterLevelAsPer) {
-  //   Serial.printf("Water level did not changed in Percentage. do nothing...!\r\n");
-  //   return;
-  // }  
-  // lastWaterLevelAsPer = waterLevelAsPer;
   
-  Serial.printf("Distance (cm): %f. %d%%\r\n", distanceInCm, waterLevelAsPer); 
+  Serial.printf("Distance (cm): %f. %d%%\r\n", distanceInCm, waterLevelAsPer);
+  WebSerial.printf("Distance (cm): %f. %d%%\r\n", distanceInCm, waterLevelAsPer);
   
-  /* Update water level on server */  
-  updateRangeValue(waterLevelAsPer);  
-  Blynk.virtualWrite(VPIN_WATER_LEVEL, waterLevelAsPer);
+  /* Update distance on server */
   Blynk.virtualWrite(VPIN_DISTANCE, distanceInCm);
   displayData();
 
   /* only play buzzer when water level changes in percentage */
   if(lastWaterLevelAsPer != waterLevelAsPer) {
+    /* Update water level on server */  
+    updateRangeValue(waterLevelAsPer);  
+    Blynk.virtualWrite(VPIN_WATER_LEVEL, waterLevelAsPer);
+
   /* Send a push notification if the water level is too low! */
     if(waterLevelAsPer < 5) { 
       sendPushNotification("Water level is too low!");
@@ -200,13 +208,17 @@ void handleSensor() {
       controlBuzzer(700);
       delay(400);
     } 
-  }
-  
+  } 
+  else {
+    Serial.printf("Water level did not changed in Percentage. do nothing...!\r\n");
+    WebSerial.printf("Water level did not changed in Percentage. do nothing...!\r\n");
+  }  
 }
 
 void controlBuzzer(int duration){
   digitalWrite(BuzzerPin, HIGH);
   Serial.println(" BuzzerPin HIT");
+  WebSerial.println(" BuzzerPin HIT");
   delay(duration);
   digitalWrite(BuzzerPin, LOW);
 } 
@@ -216,15 +228,6 @@ void controlBuzzer(int duration){
  *********/
 
  void setupHttpServer(){
-  // Setting the ESP as an access point
-  Serial.print("Setting AP (Access Point)…");
-  // Remove the password parameter, if you want the AP (Access Point) to be open
-  WiFi.softAP(ap_ssid, ap_password);
-
-  IPAddress IP = WiFi.softAPIP();
-  Serial.print("AP IP address: ");
-  Serial.println(IP);
-
   server.on("/waterLevelAsPer", HTTP_GET, [](AsyncWebServerRequest *request){
     Serial.println("waterLevelAsPer api endpoint hit…");
     request->send_P(200, "text/plain", String(waterLevelAsPer).c_str());
@@ -245,6 +248,10 @@ void controlBuzzer(int duration){
   });
 
   AsyncElegantOTA.begin(&server);    // Start AsyncElegantOTA
+  // WebSerial is accessible at "<IP Address>/webserial" in browser
+  WebSerial.begin(&server);
+  /* Attach Message Callback */
+  WebSerial.onMessage(recvMsg);
   // Start server
   server.begin();
  }
@@ -255,8 +262,8 @@ void setupSensor() {
 }
 
 void setupSinricPro() {
-  SinricPro.onConnected([]{ Serial.printf("[SinricPro]: Connected\r\n"); });
-  SinricPro.onDisconnected([]{ Serial.printf("[SinricPro]: Disconnected\r\n"); });
+  SinricPro.onConnected([]{ Serial.printf("[SinricPro]: Connected\r\n"); WebSerial.println("[SinricPro]: Connected"); });
+  SinricPro.onDisconnected([]{ Serial.printf("[SinricPro]: Disconnected\r\n"); WebSerial.println("[SinricPro]: Connected"); });
   SinricPro.begin(APP_KEY, APP_SECRET);
 }
 
@@ -273,6 +280,7 @@ void setupVariables(){
 void setupDisplay(){
   if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
     Serial.println(F("SSD1306 allocation failed"));
+    WebSerial.println(F("SSD1306 allocation failed"));
     for(;;);
   }
   delay(1000);  
@@ -321,18 +329,42 @@ void setupWiFi() {
     WiFi.setAutoReconnect(true);
   #endif
 
+  WiFi.mode(WIFI_AP_STA);
+  // Setting the ESP as an access point
+  Serial.print("[WiFi]: Setting AP (Access Point)…");
+  // Remove the password parameter, if you want the AP (Access Point) to be open
+  if(WiFi.softAP(ap_ssid,ap_password,1,false)==true)
+  {
+    Serial.print("[WiFi]: Access Point is Created with SSID: ");
+    Serial.println(ap_ssid);
+    Serial.print("[WiFi]: Access Point IP: ");
+    Serial.println(WiFi.softAPIP());
+  }
+  else
+  {
+    Serial.println("[WiFi]: Unable to Create Access Point");
+  }
+
   WiFi.begin(SSID, PASS);
   Serial.printf("[WiFi]: Connecting to %s", SSID);
+  WebSerial.printf("[WiFi]: Connecting to %s", SSID);
   while (WiFi.status() != WL_CONNECTED) {
     Serial.printf(".");
+    WebSerial.printf(".");
     delay(250);
   }
 
   Serial.println("");
-  Serial.print("Connected to ");
+  Serial.print("[WiFi]: Connected to ");
   Serial.println(SSID);
-  Serial.print("IP address: ");
+  Serial.print("[WiFi]: IP address: ");
   Serial.println(WiFi.localIP());
+
+  WebSerial.println("");
+  WebSerial.print("[WiFi]: Connected to ");
+  WebSerial.println(SSID);
+  WebSerial.print("[WiFi]: IP address: ");
+  WebSerial.println(WiFi.localIP());
 }
 
 void checkBlynkStatus() { // called every 3 seconds by SimpleTimer
@@ -340,12 +372,24 @@ void checkBlynkStatus() { // called every 3 seconds by SimpleTimer
   bool isconnected = Blynk.connected();
   if (isconnected == false) {
     Serial.println("[Blynk]: Not Connected");
+    WebSerial.println("[Blynk]: Not Connected");
     digitalWrite(wifiLed, HIGH);
   }
   if (isconnected == true) {
     digitalWrite(wifiLed, LOW);
     Serial.println("[Blynk]: Connected");
+    WebSerial.println("[Blynk]: Connected");
   }
+}
+
+/* Message callback of WebSerial */
+void recvMsg(uint8_t *data, size_t len){
+  WebSerial.println("Received Data...");
+  String d = "";
+  for(int i=0; i < len; i++){
+    d += char(data[i]);
+  }
+  WebSerial.println(d);
 }
 
 void setup() {
