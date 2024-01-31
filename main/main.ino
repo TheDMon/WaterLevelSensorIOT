@@ -39,7 +39,7 @@
 #endif
 
 #include <AsyncElegantOTA.h>
-
+#include <NewPing.h>
 #include <SinricPro.h>
 #include "WaterLevelIndicator.h"
 #include <Adafruit_SSD1306.h>
@@ -69,8 +69,11 @@
 
 #define wifiLed    D0
 #define BuzzerPin  D3
+#define ThresholdPin  D7 //for stopping sensor reading at min distance i.e. 20cm
+#define ThresholdLedPin  D8
 #define VPIN_WATER_LEVEL    V1 ////for blynk app
 #define VPIN_DISTANCE    V2 //for blynk app
+#define VPIN_THRESHOLD    V3 //for blynk app
 
 char auth[] = BLYNK_AUTH_TOKEN;
 
@@ -93,10 +96,13 @@ const char* ap_password = "123456789";
 AsyncWebServer server(80);
 
 long duration;
-float distanceInCm; 
+long distanceInCm; 
 int waterLevelAsPer;
 int lastWaterLevelAsPer;
-float lastDistanceInCm;
+long lastDistanceInCm;
+bool thresholdHit = false;
+
+NewPing sonar(trigPin, echoPin, 200); // NewPing setup of pins and maximum distance.
 
 // RangeController
 void updateRangeValue(int value) {
@@ -108,17 +114,6 @@ void sendPushNotification(String notification) {
   waterLevelIndicator.sendPushNotification(notification);
 }
 
-long getDuration() {
-  digitalWrite(trigPin, LOW);
-  delayMicroseconds(2);
-
-  digitalWrite(trigPin, HIGH);
-  delayMicroseconds(15);
-
-  digitalWrite(trigPin, LOW);
-  return pulseIn(echoPin, HIGH);
-}
-
 void handleSensor() {
   if (SinricPro.isConnected() == false) {
     Serial.printf("SinricPro is disconnected. Please check!\r\n");
@@ -128,55 +123,63 @@ void handleSensor() {
   if(Blynk.connected() == false) {
     Serial.printf("Blynk is disconnected. Please check!\r\n");
     WebSerial.println("Blynk is disconnected. Please check!");
-  }
+  }                    
 
   static unsigned long last_millis;
   unsigned long        current_millis = millis();
   if (last_millis && current_millis - last_millis < EVENT_WAIT_TIME) return; // Wait untill 30 secs
   last_millis = current_millis;
 
-  int measurementsCounter = 30;
-  duration = 0;
-  long pulseDuration = 0;
-  for (int i = 0; i < measurementsCounter; i++) {
-    pulseDuration = getDuration();
-    Serial.printf("pulseDuration ==>: %d\r\n", pulseDuration);
-    WebSerial.printf("pulseDuration ==>: %d\r\n", pulseDuration);
-    duration += pulseDuration;
-    delay(100);
-  }
+  if(digitalRead(ThresholdPin) == HIGH){
+    Serial.println("Water level has reached 20cm from sensor. Sensor will not take reading anymore.");
+    WebSerial.println("Water level has reached 20cm from sensor. Sensor will not take reading anymore.");
+    distanceInCm = FULL_TANK_HEIGHT; // set full tank height
+    digitalWrite(ThresholdLedPin, HIGH); // glow led
+    Blynk.virtualWrite(VPIN_THRESHOLD, 1);
+    thresholdHit = true;
 
-  duration = duration/measurementsCounter;
+    if(lastDistanceInCm == distanceInCm) return; // lets skip exec from 2nd iteration onwards
+  }
+  else {
+    digitalWrite(ThresholdLedPin, LOW); // off threshold led
+    Blynk.virtualWrite(VPIN_THRESHOLD, 0);
+    thresholdHit = false;
 
-  Serial.printf("duration read: %d..\r\n", duration); 
-  WebSerial.printf("duration read: %d..\r\n", duration); 
-  distanceInCm = duration / 29 / 2;
-  
-  if(distanceInCm <= 0) { 
-    Serial.printf("Invalid reading: %d..\r\n", distanceInCm); 
-    WebSerial.printf("Invalid reading: %d..\r\n", distanceInCm); 
-    return;
-  }
-  
-  if(lastDistanceInCm == distanceInCm) { 
-    Serial.printf("Water level did not changed. do nothing...!\r\n");
-    WebSerial.println("Water level did not changed. do nothing...!");
-    return;
-  }
-  
-  int change = abs(lastDistanceInCm - distanceInCm);
-  if(change < 2) {
-    Serial.println("Too small change in water level (waves?). Ignore...");
-    WebSerial.println("Too small change in water level (waves?). Ignore...");
-    return;
-  }
+    duration = sonar.ping_median(30);
+    distanceInCm = duration / 29 / 2;
+
+    Serial.printf("sonar ping median duration: ==> %d\r\n", duration);
+    WebSerial.printf("sonar ping median duration: ==> %d\r\n ", duration);
+
+    if(distanceInCm <= 0) { 
+      Serial.printf("Invalid reading: %d..\r\n", distanceInCm); 
+      WebSerial.printf("Invalid reading: %d..\r\n", distanceInCm); 
+      return;
+    }
+    
+    if(lastDistanceInCm == distanceInCm) { 
+      Serial.printf("Water level did not change. do nothing...!\r\n");
+      WebSerial.println("Water level did not change. do nothing...!");
+      return;
+    }
+    
+    int change = abs(lastDistanceInCm - distanceInCm);
+    if(change < 1) {
+      Serial.println("Too small change in water level (waves?). Ignore...");
+      WebSerial.println("Too small change in water level (waves?). Ignore...");
+      return;
+    }
+  }  
+
+  Serial.printf("distanceInCm: %d\r\n", distanceInCm); 
+  WebSerial.printf("distanceInCm: %d..\r\n", distanceInCm);   
   
   lastDistanceInCm = distanceInCm;
   waterLevelAsPer = map((int)distanceInCm ,EMPTY_TANK_HEIGHT, FULL_TANK_HEIGHT, 0, 100); 
   waterLevelAsPer = constrain(waterLevelAsPer, 1, 100);
   
-  Serial.printf("Distance (cm): %f. %d%%\r\n", distanceInCm, waterLevelAsPer);
-  WebSerial.printf("Distance (cm): %f. %d%%\r\n", distanceInCm, waterLevelAsPer);
+  Serial.printf("Distance (cm): %d. %d%%\r\n", distanceInCm, waterLevelAsPer);
+  WebSerial.printf("Distance (cm): %d. %d%%\r\n", distanceInCm, waterLevelAsPer);
   
   /* Update distance on server */
   Blynk.virtualWrite(VPIN_DISTANCE, distanceInCm);
@@ -234,12 +237,17 @@ void controlBuzzer(int duration){
   });
 
   server.on("/distance", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("test api endpoint hit…");
+    Serial.println("distance api endpoint hit…");
     request->send_P(200, "text/plain",  String(distanceInCm).c_str());
   });
 
+  server.on("/threshold", HTTP_GET, [](AsyncWebServerRequest *request){
+    Serial.println("threshold api endpoint hit…");
+    request->send_P(200, "text/plain",  String(thresholdHit).c_str());
+  });
+
   server.on("/test", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.println("distance api endpoint hit…");
+    Serial.println("test api endpoint hit…");
     request->send_P(200, "text/plain", "This is test message");
   });
 
@@ -270,6 +278,8 @@ void setupSinricPro() {
 void setupNodeMCU(){
   pinMode(wifiLed, OUTPUT);
   pinMode(BuzzerPin, OUTPUT);
+  pinMode(ThresholdPin, INPUT_PULLUP);
+  pinMode(ThresholdLedPin, OUTPUT);
 }
 
 void setupVariables(){
